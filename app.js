@@ -1,141 +1,177 @@
-const storageKey = "wxyy-2-thin-section-index";
-const state = JSON.parse(localStorage.getItem(storageKey) || '{"samples":[],"compare":[]}');
+/*
+ * 装配层：只负责 DOM 取值、事件分发与渲染。
+ * 判定在 Domain，写入与留档在 Store，HTML 在 View。
+ */
+(function () {
+  "use strict";
 
-const form = document.querySelector("#sampleForm");
-const photoInput = document.querySelector("#photoInput");
-const sampleGrid = document.querySelector("#sampleGrid");
-const comparePane = document.querySelector("#comparePane");
-const mineralFilter = document.querySelector("#mineralFilter");
-const polarFilter = document.querySelector("#polarFilter");
+  var form = document.querySelector("#sampleForm");
+  var photoInput = document.querySelector("#photoInput");
+  var editorMsg = document.querySelector("#editorMsg");
+  var sampleGrid = document.querySelector("#sampleGrid");
+  var comparePane = document.querySelector("#comparePane");
+  var mineralFilter = document.querySelector("#mineralFilter");
+  var polarFilter = document.querySelector("#polarFilter");
+  var reviewStatusFilter = document.querySelector("#reviewStatusFilter");
 
-let pendingPhoto = "";
+  var pendingPhoto = "";
 
-function save() {
-  localStorage.setItem(storageKey, JSON.stringify(state));
-}
+  // 仅页面会话内有效的暂存：被拒表单回填、局部提示；刷新后清空
+  var drafts = {};
+  var ui = null;
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve) => {
-    if (!file) return resolve("");
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.readAsDataURL(file);
-  });
-}
-
-function filteredSamples() {
-  const mineral = mineralFilter.value.trim();
-  const polarization = polarFilter.value;
-  return state.samples.filter((sample) => {
-    const mineralMatch = !mineral || sample.minerals.includes(mineral);
-    const polarMatch = !polarization || sample.polarization === polarization;
-    return mineralMatch && polarMatch;
-  });
-}
-
-function render() {
-  const rows = filteredSamples();
-  sampleGrid.innerHTML = rows.length ? rows.map((sample) => `
-    <article class="sample-card">
-      ${sample.photo ? `<img src="${sample.photo}" alt="${sample.code}显微照片">` : "<div class=\"photo-placeholder\"></div>"}
-      <div class="sample-body">
-        <h3>${sample.code}</h3>
-        <p>${sample.location || "未记录地点"} · ${sample.magnification || "未记录倍数"} · ${sample.polarization}</p>
-        <p>矿物：${sample.minerals || "未记录"}</p>
-        <p>结构：${sample.texture || "未记录"}</p>
-        <p>${sample.comment || "未填写批注"}</p>
-        <div class="card-actions">
-          <label><input type="checkbox" data-compare="${sample.id}" ${state.compare.includes(sample.id) ? "checked" : ""}>对比</label>
-          <button type="button" data-delete="${sample.id}">删除</button>
-        </div>
-      </div>
-    </article>
-  `).join("") : "<p>还没有样本，先从左侧录入一张薄片照片。</p>";
-
-  const compareSamples = state.compare
-    .map((id) => state.samples.find((sample) => sample.id === id))
-    .filter(Boolean)
-    .slice(0, 2);
-
-  comparePane.innerHTML = compareSamples.length ? compareSamples.map((sample) => `
-    <article class="compare-item">
-      ${sample.photo ? `<img src="${sample.photo}" alt="${sample.code}对比图">` : ""}
-      <h3>${sample.code}</h3>
-      <p>${sample.polarization} · ${sample.minerals || "未记录矿物"}</p>
-      <p>${sample.texture || "未记录结构"}</p>
-    </article>
-  `).join("") : "<p>勾选两张样本卡片后可并排对比。</p>";
-}
-
-photoInput.addEventListener("change", async () => {
-  pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
-});
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(form);
-  if (!pendingPhoto && photoInput.files[0]) {
-    pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
+  function readFileAsDataUrl(file) {
+    return new Promise(function (resolve) {
+      if (!file) return resolve("");
+      var reader = new FileReader();
+      reader.addEventListener("load", function () { return resolve(reader.result); });
+      reader.readAsDataURL(file);
+    });
   }
-  state.samples.unshift({
-    id: crypto.randomUUID(),
-    photo: pendingPhoto,
-    code: data.get("code").trim(),
-    location: data.get("location").trim(),
-    magnification: data.get("magnification").trim(),
-    polarization: data.get("polarization"),
-    minerals: data.get("minerals").trim(),
-    texture: data.get("texture").trim(),
-    comment: data.get("comment").trim(),
-    createdAt: new Date().toISOString()
-  });
-  pendingPhoto = "";
-  photoInput.value = "";
-  form.reset();
-  save();
-  render();
-});
 
-sampleGrid.addEventListener("click", (event) => {
-  const deleteId = event.target.dataset.delete;
-  if (deleteId) {
-    state.samples = state.samples.filter((sample) => sample.id !== deleteId);
-    state.compare = state.compare.filter((id) => id !== deleteId);
-    save();
+  function render() {
+    sampleGrid.innerHTML = View.renderGrid(drafts, ui);
+    comparePane.innerHTML = View.renderCompare();
+  }
+
+  function keepDraft(scope, formEl) {
+    var fields = ["mineral", "position", "operator", "th", "td", "reviewer"];
+    drafts[scope] = {};
+    fields.forEach(function (name) {
+      var field = formEl.elements[name];
+      if (field) drafts[scope][name] = field.value;
+    });
+  }
+
+  function handlePointSubmit(event) {
+    var formEl = event.target;
+    var action = formEl.dataset.action;
+    if (!action) return;
+    event.preventDefault();
+
+    var sampleId = formEl.dataset.sample;
+    var pointId = formEl.dataset.point;
+    var scope = action + ":" + sampleId + (pointId ? ":" + pointId : "");
+    var data = new FormData(formEl);
+    var input = {
+      mineral: data.get("mineral"),
+      position: data.get("position"),
+      operator: data.get("operator"),
+      th: data.get("th"),
+      td: data.get("td"),
+      reviewer: data.get("reviewer")
+    };
+
+    var result;
+    if (action === "add") result = Store.addMeasurement(sampleId, input);
+    if (action === "review") result = Store.reviewMeasurement(sampleId, pointId, input);
+    if (action === "remeasure") result = Store.remeasureMeasurement(sampleId, pointId, input);
+    if (action === "correct") result = Store.correctMeasurement(sampleId, pointId, input);
+
+    if (result.ok) {
+      delete drafts[scope];
+      var text;
+      if (action === "add") text = "测温点已保存，进入待复核";
+      else if (action === "review") text = result.decision === "pass"
+        ? "复核通过，复测对照已记录"
+        : "温差超过 5℃，已退回返测";
+      else if (action === "remeasure") text = "返测已登记，退回记录作废留档，重新等待换人复核";
+      else text = "已按新值更正，旧复核与对照作废并留档，测点重排待复核";
+      ui = { scope: scope, ok: true, text: text };
+    } else {
+      keepDraft(scope, formEl);
+      ui = { scope: scope, ok: false, text: (result.errors || []).join("；") };
+    }
     render();
   }
-});
 
-sampleGrid.addEventListener("change", (event) => {
-  const id = event.target.dataset.compare;
-  if (!id) return;
-  if (event.target.checked) {
-    state.compare = [id, ...state.compare.filter((item) => item !== id)].slice(0, 2);
-  } else {
-    state.compare = state.compare.filter((item) => item !== id);
+  photoInput.addEventListener("change", async function () {
+    pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
+  });
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    var data = new FormData(form);
+    if (!pendingPhoto && photoInput.files[0]) {
+      pendingPhoto = await readFileAsDataUrl(photoInput.files[0]);
+    }
+    Store.addSample(data, pendingPhoto);
+    pendingPhoto = "";
+    photoInput.value = "";
+    form.reset();
+    editorMsg.textContent = "样本已保存。";
+    render();
+  });
+
+  sampleGrid.addEventListener("submit", handlePointSubmit);
+
+  sampleGrid.addEventListener("click", function (event) {
+    var deleteId = event.target.dataset.delete;
+    if (!deleteId) return;
+    Store.deleteSample(deleteId);
+    drafts = {};
+    ui = null;
+    render();
+  });
+
+  sampleGrid.addEventListener("change", function (event) {
+    var id = event.target.dataset.compare;
+    if (!id) return;
+    Store.toggleCompare(id, event.target.checked);
+    render();
+  });
+
+  // 筛选条件写入记录并持久化，刷新后保持一致
+  mineralFilter.value = Store.state.filters.mineral || "";
+  polarFilter.value = Store.state.filters.polarization || "";
+  reviewStatusFilter.value = Store.state.filters.reviewStatus || "";
+
+  function syncFilters() {
+    Store.patchFilters({
+      mineral: mineralFilter.value.trim(),
+      polarization: polarFilter.value,
+      reviewStatus: reviewStatusFilter.value
+    });
+    render();
   }
-  save();
+  mineralFilter.addEventListener("input", syncFilters);
+  polarFilter.addEventListener("change", syncFilters);
+  reviewStatusFilter.addEventListener("change", syncFilters);
+
+  document.querySelector("#exportBtn").addEventListener("click", function () {
+    var checklist = Store.state.samples.map(function (sample) {
+      var points = Domain.pointsOfSlide(Store.state, sample.id).map(function (p) {
+        return {
+          矿物: p.mineral,
+          片内位置: p.position,
+          测量人: p.operator,
+          初测均一温度: p.th,
+          初测爆裂温度: p.td,
+          复核状态: Domain.STATUS[p.status].text,
+          复核人: p.review ? p.review.reviewer : "",
+          复测均一温度: p.review ? p.review.th : "",
+          复测爆裂温度: p.review ? p.review.td : "",
+          留档条数: p.history.length
+        };
+      });
+      return {
+        样本编号: sample.code,
+        采样地点: sample.location,
+        放大倍数: sample.magnification,
+        偏光类型: sample.polarization,
+        主要矿物: sample.minerals,
+        颗粒结构: sample.texture,
+        老师批注: sample.comment,
+        包裹体测温: points
+      };
+    });
+    var blob = new Blob([JSON.stringify(checklist, null, 2)], { type: "application/json" });
+    var link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "thin-section-checklist.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
   render();
-});
-
-[mineralFilter, polarFilter].forEach((field) => field.addEventListener("input", render));
-
-document.querySelector("#exportBtn").addEventListener("click", () => {
-  const checklist = state.samples.map((sample) => ({
-    样本编号: sample.code,
-    采样地点: sample.location,
-    放大倍数: sample.magnification,
-    偏光类型: sample.polarization,
-    主要矿物: sample.minerals,
-    颗粒结构: sample.texture,
-    老师批注: sample.comment
-  }));
-  const blob = new Blob([JSON.stringify(checklist, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "thin-section-checklist.json";
-  link.click();
-  URL.revokeObjectURL(link.href);
-});
-
-render();
+})();
