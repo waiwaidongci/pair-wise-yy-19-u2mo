@@ -40,7 +40,7 @@
 
       <section class="board">
         <div class="filters">
-          <input id="mineralFilter" placeholder="按矿物筛选">
+          <input id="mineralFilter" placeholder="按矿物筛选（薄片与测温点）">
           <select id="polarFilter">
             <option value="">全部偏光</option>
             <option>单偏光</option>
@@ -49,6 +49,34 @@
           </select>
         </div>
         <div id="sampleGrid" class="sample-grid"></div>
+
+        <section class="thermo">
+          <div class="thermo-head">
+            <div>
+              <h2>包裹体测温复核</h2>
+              <p class="thermo-note">每片按矿物 + 位置只保留一个测点；同一测点同时只有一条待复核记录，复核须换人，两次温差超过 5℃ 退回返测。</p>
+            </div>
+            <select id="statusFilter">
+              <option value="">全部状态</option>
+              <option value="pending">待复核</option>
+              <option value="approved">复核通过</option>
+              <option value="returned">退回返测</option>
+            </select>
+          </div>
+
+          <form id="pointForm" class="point-form">
+            <select name="sampleId" id="pointSampleSelect" required></select>
+            <input name="mineral" placeholder="矿物，如 石英">
+            <input name="position" placeholder="测点位置，如 视域B 裂隙中段">
+            <input name="th" type="number" step="0.1" placeholder="均一温度 ℃">
+            <input name="td" type="number" step="0.1" placeholder="爆裂温度 ℃">
+            <input name="observer" placeholder="初测人">
+            <button type="submit">新增测点</button>
+            <p id="pointFormMsg" class="form-msg" hidden></p>
+          </form>
+
+          <div id="pointList" class="point-list"></div>
+        </section>
       </section>
 
       <aside class="compare">
@@ -57,6 +85,9 @@
       </aside>
     </section>
   </main>
+  <!-- 判定（domain.js）→ 记录（store.js）→ 页面（app.js），三层分开 -->
+  <script src="./domain.js"></script>
+  <script src="./store.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
